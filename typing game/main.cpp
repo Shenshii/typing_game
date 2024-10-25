@@ -3,74 +3,80 @@
 #include <iostream>
 #include <fstream>
 #include <string>
+#include <set>
 #include <sstream>
+#include <ctime>
 
 #pragma comment(lib, "Shell32.lib") // Link with Shell32.lib
 
-// Thread function to simulate game logic or UI update
-DWORD WINAPI ThreadFunction(LPVOID lpParam) {
-    std::cout << "Thread is running..." << std::endl;
-
-    // Simulate game state updates (e.g., handling input, updating UI)
-    for (int i = 0; i < 10; i++) {
-        std::cout << "Updating game state... " << i + 1 << std::endl;
-        Sleep(1000); // Simulate work for 1 second
-    }
-    return 0;
+// Function to show a popup window with statistics
+void showPopup(const std::wstring& message) {
+    MessageBoxW(NULL, message.c_str(), L"Typing Game Stats", MB_OK | MB_ICONINFORMATION);
 }
 
-// Function to calculate word and character count from file content
-void calculateWordAndCharCount(const std::string& filePath) {
-    std::ifstream file(filePath);
+// Function to calculate word and character count, and find unique words
+void calculateWordAndCharCount(const std::wstring& filePath, int& wordCount, int& charCount, int& uniqueWordCount) {
+    std::wifstream file(filePath.c_str());
     if (!file.is_open()) {
-        std::cout << "Failed to open file: " << filePath << std::endl;
+        std::wcout << L"Failed to open file: " << filePath << std::endl;
         return;
     }
 
-    std::string line, word;
-    int wordCount = 0, charCount = 0;
+    std::wstring line, word;
+    std::set<std::wstring> uniqueWords;
+    wordCount = 0;
+    charCount = 0;
 
     while (getline(file, line)) {
-        std::istringstream lineStream(line);
+        std::wstringstream lineStream(line);
         while (lineStream >> word) {
             wordCount++;
+            uniqueWords.insert(word);
         }
         charCount += line.length(); // Counts characters in each line
     }
 
+    uniqueWordCount = uniqueWords.size();
     file.close();
-    std::cout << "File content successfully loaded." << std::endl;
-    std::cout << "Word Count: " << wordCount << std::endl;
-    std::cout << "Character Count (excluding spaces): " << charCount << std::endl;
 }
 
+// Main function
 int main() {
-    // Use SHGetFolderPath to get the Documents folder path dynamically
-    char docPath[MAX_PATH];
-    if (SHGetFolderPath(NULL, CSIDL_PERSONAL, NULL, 0, docPath) != S_OK) {
-        std::cout << "Failed to get Documents folder path." << std::endl;
+    // Use SHGetFolderPathW to get the Documents folder path dynamically (wide char)
+    WCHAR docPath[MAX_PATH];
+    if (SHGetFolderPathW(NULL, CSIDL_PERSONAL, NULL, 0, docPath) != S_OK) {
+        std::wcout << L"Failed to get Documents folder path." << std::endl;
         return 1;
     }
 
     // Append the file name to the Documents folder path
-    std::string filePath = std::string(docPath) + "\\typing_game_output.txt";
+    std::wstring filePath = std::wstring(docPath) + L"\\typing_game_output.txt";
 
-    // 1. Create a new process (example: notepad.exe)
-    STARTUPINFO si;
+    // 1. Check if the file exists, if not, create it
+    std::wifstream testFile(filePath.c_str());
+    if (!testFile) {
+        std::wofstream createFile(filePath.c_str());
+        createFile << L""; // Create an empty file
+        createFile.close();
+        std::wcout << L"File created: " << filePath << std::endl;
+    }
+    testFile.close();
+
+    // 2. Record the start time
+    std::time_t startTime = std::time(nullptr);
+
+    // 3. Create a new process to open wordpad.exe with full path
+    STARTUPINFOW si;
     PROCESS_INFORMATION pi;
 
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);
     ZeroMemory(&pi, sizeof(pi));
 
-    // Command line to launch Notepad with the file
-    std::string notepadCommand = "write.exe " + filePath;
+    std::wstring writeCommand = L"C:\\Program Files\\Windows NT\\Accessories\\wordpad.exe " + filePath;
+    LPWSTR command = const_cast<LPWSTR>(writeCommand.c_str());
 
-    // Convert command string to LPCSTR for CreateProcess
-    LPSTR command = const_cast<char*>(notepadCommand.c_str());
-
-    // Create the new process
-    if (!CreateProcess(
+    if (!CreateProcessW(
         NULL,              // Application name
         command,           // Command line arguments
         NULL,              // Process handle not inheritable
@@ -79,50 +85,46 @@ int main() {
         0,                 // Creation flags (e.g., CREATE_NEW_CONSOLE)
         NULL,              // Use parent's environment block
         NULL,              // Use parent's starting directory
-        &si,               // Pointer to STARTUPINFO structure
+        &si,               // Pointer to STARTUPINFOW structure
         &pi                // Pointer to PROCESS_INFORMATION structure
     )) {
-        std::cout << "CreateProcess failed. Error: " << GetLastError() << std::endl;
+        DWORD errorCode = GetLastError();
+        std::wcout << L"CreateProcess failed. Error: " << errorCode << std::endl;
         return 1;
     }
 
-    std::cout << "Process created (Notepad launched). Waiting for it to exit..." << std::endl;
+    std::wcout << L"Process created (Wordpad launched). Waiting for it to exit..." << std::endl;
 
-    // 2. Create a new thread for game logic/UI updates
-    HANDLE hThread;
-    DWORD threadId;
-
-    hThread = CreateThread(
-        NULL,               // Default security attributes
-        0,                  // Default stack size
-        ThreadFunction,     // Thread function
-        NULL,               // Thread function parameter
-        0,                  // Default creation flags
-        &threadId           // Receive thread identifier
-    );
-
-    if (hThread == NULL) {
-        std::cout << "CreateThread failed. Error: " << GetLastError() << std::endl;
+    // Ensure that WaitForSingleObject properly waits for Wordpad to close
+    DWORD waitResult = WaitForSingleObject(pi.hProcess, INFINITE);
+    if (waitResult == WAIT_OBJECT_0) {
+        std::wcout << L"Process (Wordpad) terminated." << std::endl;
+    } else {
+        std::wcout << L"Error waiting for Wordpad process to finish." << std::endl;
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
         return 1;
     }
 
-    std::cout << "Thread created with ID: " << threadId << std::endl;
+    // 4. Calculate the time the app was opened
+    std::time_t endTime = std::time(nullptr);
+    double elapsedTime = std::difftime(endTime, startTime);
 
-    // 3. Wait for the process to exit
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    std::cout << "Process (Notepad) terminated." << std::endl;
+    // 5. Read the saved file and calculate statistics
+    int wordCount = 0, charCount = 0, uniqueWordCount = 0;
+    calculateWordAndCharCount(filePath, wordCount, charCount, uniqueWordCount);
 
-    // 4. Wait for the thread to finish
-    WaitForSingleObject(hThread, INFINITE);
-    std::cout << "Thread execution finished." << std::endl;
-
-    // 5. Read the saved file and calculate word and character count
-    calculateWordAndCharCount(filePath);
+    // 6. Display statistics in a popup, including word count, character count, and unique word count
+    std::wstringstream stats;
+    stats << L"Words typed: " << wordCount << L"\n";
+    stats << L"Unique words: " << uniqueWordCount << L"\n";
+    stats << L"Character count: " << charCount << L"\n";
+    stats << L"Time spent in app: " << elapsedTime << L" seconds\n";
+    showPopup(stats.str());
 
     // Close process and thread handles
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
-    CloseHandle(hThread);
 
     return 0;
 }
